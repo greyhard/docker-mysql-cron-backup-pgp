@@ -7,7 +7,7 @@ wait_for_db() {
     local elapsed=0
     
     until nc -z "$MYSQL_HOST" "$MYSQL_PORT" 2>/dev/null; do
-        if [ $elapsed -ge $timeout ]; then
+        if [ "$elapsed" -ge "$timeout" ]; then
             echo "=> Timeout waiting for database after ${timeout}s"
             return 1
         fi

@@ -40,6 +40,7 @@ else
     echo "=> Using flat mode: ${BACKUP_DIR}"
 fi
 
+# shellcheck disable=SC2086
 DATABASES=${MYSQL_DATABASE:-${MYSQL_DB:-$(mysql -h "$MYSQL_HOST" -P "$MYSQL_PORT" -u "$MYSQL_USER" -p"$MYSQL_PASS" ${MYSQL_SSL_OPTS:-} -e "SHOW DATABASES;" | tr -d "| " | grep -v Database)}}
 for db in ${DATABASES}
 do
@@ -60,12 +61,13 @@ do
         LATEST="${BACKUP_DIR}/latest.${db}.sql"
     fi
     
-    BASIC_OPTS="--single-transaction --skip-lock-tables --quick"
+    BASIC_OPTS=(--single-transaction --skip-lock-tables --quick)
     if [ -n "${REMOVE_DUPLICATES:-}" ]; then
-      BASIC_OPTS="$BASIC_OPTS --skip-dump-date"
+      BASIC_OPTS+=(--skip-dump-date)
     fi
     
-    if mysqldump $BASIC_OPTS ${MYSQLDUMP_OPTS:-} -h "$MYSQL_HOST" -P "$MYSQL_PORT" -u "$MYSQL_USER" -p"$MYSQL_PASS" ${MYSQL_SSL_OPTS:-} "$db" > "$FILENAME"; then
+    # shellcheck disable=SC2086
+    if mysqldump "${BASIC_OPTS[@]}" ${MYSQLDUMP_OPTS:-} -h "$MYSQL_HOST" -P "$MYSQL_PORT" -u "$MYSQL_USER" -p"$MYSQL_PASS" ${MYSQL_SSL_OPTS:-} "$db" > "$FILENAME"; then
       EXT=""
       
       # Compression
@@ -166,7 +168,7 @@ fi
 # Rotation of old backups (split mode)
 if [ "${DATABASE_SPLIT_TO_FILE:-false}" = "true" ] && [ -n "${MAX_BACKUPS:-}" ]; then
     echo "=> Removing old backup directories (keeping last ${MAX_BACKUPS})"
-    cd /backup && ls -1dt */ 2>/dev/null | grep -E '^[0-9]' | tail -n +$((MAX_BACKUPS + 1)) | xargs -r rm -rf
+    cd /backup && ls -1dt [0-9]* 2>/dev/null | tail -n +$((MAX_BACKUPS + 1)) | xargs -r rm -rf
 fi
 
 echo "=> Backup process finished at $(date "+%Y-%m-%d %H:%M:%S")"
