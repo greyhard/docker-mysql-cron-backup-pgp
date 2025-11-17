@@ -1,19 +1,33 @@
 #!/bin/bash
+
+# Wait for database to be ready
+wait_for_db() {
+    echo "=> Waiting for database $MYSQL_HOST:$MYSQL_PORT to be ready..."
+    local timeout=${TIMEOUT:-10}
+    local elapsed=0
+    
+    until nc -z "$MYSQL_HOST" "$MYSQL_PORT" 2>/dev/null; do
+        if [ $elapsed -ge $timeout ]; then
+            echo "=> Timeout waiting for database after ${timeout}s"
+            return 1
+        fi
+        echo "=> Waiting for database container... (${elapsed}s/${timeout}s)"
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    
+    echo "=> Database is ready!"
+    return 0
+}
+
+# Wait for database before starting
+wait_for_db || echo "=> Warning: Database not ready, continuing anyway..."
+
 tail -F /mysql_backup.log &
 
 if [ "${INIT_BACKUP:-0}" -gt "0" ]; then
   echo "=> Create a backup on the startup"
   /backup.sh
-elif [ -n "${INIT_RESTORE_LATEST}" ]; then
-  echo "=> Restore latest backup"
-  until nc -z "$MYSQL_HOST" "$MYSQL_PORT"
-  do
-      echo "waiting database container..."
-      sleep 1
-  done
-  # Needed to exclude the 'latest.<database>.sql.gz' file, consider only filenames starting with number
-  # Only data-tagged backups, eg. '202212250457.database.sql.gz', must be trapped by the regex
-  find /backup -maxdepth 1 -name '[0-9]*.*.sql.gz' | sort | tail -1 | xargs /restore.sh
 fi
 
 function final_backup {

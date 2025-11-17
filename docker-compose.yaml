@@ -8,7 +8,7 @@ services:
       - 3306
     volumes:
       - data:/var/lib/mysql
-      - ${VOLUME_PATH}/backup:/backup
+      - ./backup:/backup
     environment:
       - MYSQL_DATABASE=${DATABASE_NAME}
       - MYSQL_ROOT_PASSWORD=${MARIADB_ROOT_PASSWORD}
@@ -21,19 +21,27 @@ services:
 
   backup:
     build: .
-    image: fradelg/mysql-cron-backup
+    image: greyhard/mysql-cron-backup-pgp
     depends_on:
       mariadb:
         condition: service_healthy
     volumes:
-      - ${VOLUME_PATH}/backup:/backup
+      - ./backup:/backup
+      # Uncomment to use PGP encryption with mounted keys
+      - ./secrets:/secrets:ro
     environment:
       - MYSQL_HOST=my_mariadb
       - MYSQL_USER=root
       - MYSQL_PASS=${MARIADB_ROOT_PASSWORD}
-      - MAX_BACKUPS=1
+      - MAX_BACKUPS=7
       - INIT_BACKUP=1
-      - CRON_TIME=0 0 * * *
+      - CRON_TIME=0 3 * * *
+      - GZIP_LEVEL=9
+      # Uncomment to enable split mode (separate directory per backup)
+      # - DATABASE_SPLIT_TO_FILE=true
+      # Enable PGP encryption
+      - PGP_KEY_FILE=file:/secrets/pgp_public_key
+      - PGP_PRIVATE_KEY_FILE=/secrets/pgp_private_key
     restart: unless-stopped
 
 volumes:

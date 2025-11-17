@@ -1,1 +1,5 @@
 data
+secrets
+backup
+.env
+.idea
