@@ -1,6 +1,8 @@
-# mysql-cron-backup
+# mysql-cron-backup-pgp
 
 Run mysqldump to backup your databases periodically using the cron task manager in the container. Your backups are saved in `/backup`. You can mount any directory of your host or a docker volumes in /backup. Othwerwise, a docker volume is created in the default location.
+
+Also you can add PGP encryption to your backups. (Optional)
 
 ## Usage:
 
