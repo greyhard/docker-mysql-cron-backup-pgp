@@ -1,4 +1,4 @@
-FROM alpine:3.20.3
+FROM alpine:3.24.2
 LABEL maintainer="Ilynikh Denis <greyhard@gmail.com>"
 
 RUN apk add --update \
