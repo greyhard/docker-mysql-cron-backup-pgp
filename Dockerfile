@@ -1,4 +1,4 @@
-FROM alpine:3.14
+FROM alpine:3.20.3
 LABEL maintainer="Ilynikh Denis <greyhard@gmail.com>"
 
 RUN apk add --update \
@@ -6,7 +6,7 @@ RUN apk add --update \
     bash \
     gzip \
     openssl \
-    mysql-client \
+    mysql-client=~10.11 \
     mariadb-connector-c \
     netcat-openbsd \
     gnupg \
