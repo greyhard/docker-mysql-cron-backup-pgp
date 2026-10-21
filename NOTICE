@@ -1,0 +1,7 @@
+docker-mysql-cron-backup-pgp
+Copyright 2025 Ilynikh Denis
+
+This product is derived from fradelg/docker-mysql-cron-backup
+(https://github.com/fradelg/docker-mysql-cron-backup),
+licensed under the Apache License, Version 2.0.
+The full history of the original project is preserved in this repository.

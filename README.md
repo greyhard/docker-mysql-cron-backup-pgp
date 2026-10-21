@@ -4,6 +4,17 @@ Run mysqldump to backup your databases periodically using the cron task manager 
 
 Also you can add PGP encryption to your backups. (Optional)
 
+## Origin
+
+This project is derived from [fradelg/docker-mysql-cron-backup](https://github.com/fradelg/docker-mysql-cron-backup)
+(Apache License 2.0, see `LICENSE` and `NOTICE`); the original history is preserved in this repository.
+Differences from the original:
+
+- PGP encryption of dumps (`PGP_KEY`, `PGP_KEY_FILE`);
+- split mode: a directory per backup run (`DATABASE_SPLIT_TO_FILE`);
+- connection through a MySQL socket (`MYSQL_SOCKET`, `MYSQL_SOCKET_FILE`);
+- a healthcheck that verifies the database connection and the age of the last successful backup.
+
 ## Usage:
 
 ```bash
