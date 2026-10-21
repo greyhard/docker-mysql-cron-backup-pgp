@@ -21,7 +21,7 @@ services:
 
   backup:
     build: .
-    image: greyhard/mysql-cron-backup-pgp
+    image: greyhard/docker-mysql-cron-backup-pgp
     depends_on:
       mariadb:
         condition: service_healthy

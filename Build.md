@@ -5,7 +5,7 @@
 First time only - create a builder:
 
 ```bash
-docker buildx create --name multiplatform --driver docker-container --use
+docker buildx use multiplatform
 docker buildx inspect --bootstrap
 ```
 

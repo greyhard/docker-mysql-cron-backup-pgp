@@ -1,9 +1,15 @@
 #!/bin/bash
 set -euo pipefail
 
-# Get hostname: try read from file, else get from env
-[ -z "${MYSQL_HOST_FILE:-}" ] || MYSQL_HOST=$(head -1 "${MYSQL_HOST_FILE}")
-[ -z "${MYSQL_HOST:-}" ] && { echo "=> MYSQL_HOST cannot be empty"; exit 1; }
+# Get socket path: try read from file, else get from env
+[ -z "${MYSQL_SOCKET_FILE:-}" ] || MYSQL_SOCKET=$(head -1 "${MYSQL_SOCKET_FILE}")
+MYSQL_SOCKET="${MYSQL_SOCKET:-}"
+
+# Get hostname: try read from file, else get from env (only if socket not set)
+if [ -z "${MYSQL_SOCKET}" ]; then
+  [ -z "${MYSQL_HOST_FILE:-}" ] || MYSQL_HOST=$(head -1 "${MYSQL_HOST_FILE}")
+  [ -z "${MYSQL_HOST:-}" ] && { echo "=> MYSQL_HOST or MYSQL_SOCKET must be set"; exit 1; }
+fi
 # Get username: try read from file, else get from env
 [ -z "${MYSQL_USER_FILE:-}" ] || MYSQL_USER=$(head -1 "${MYSQL_USER_FILE}")
 [ -z "${MYSQL_USER:-}" ] && { echo "=> MYSQL_USER cannot be empty"; exit 1; }
@@ -40,8 +46,17 @@ else
     echo "=> Using flat mode: ${BACKUP_DIR}"
 fi
 
+# Build connection options
+if [ -n "${MYSQL_SOCKET}" ]; then
+  MYSQL_CONN_OPTS="--protocol=SOCKET --socket=${MYSQL_SOCKET} -h localhost"
+  echo "=> Using socket connection: ${MYSQL_SOCKET}"
+else
+  MYSQL_CONN_OPTS="-h ${MYSQL_HOST} -P ${MYSQL_PORT}"
+  echo "=> Using TCP connection: ${MYSQL_HOST}:${MYSQL_PORT}"
+fi
+
 # shellcheck disable=SC2086
-DATABASES=${MYSQL_DATABASE:-${MYSQL_DB:-$(mysql -h "$MYSQL_HOST" -P "$MYSQL_PORT" -u "$MYSQL_USER" -p"$MYSQL_PASS" ${MYSQL_SSL_OPTS:-} -e "SHOW DATABASES;" | tr -d "| " | grep -v Database)}}
+DATABASES=${MYSQL_DATABASE:-${MYSQL_DB:-$(mysql ${MYSQL_CONN_OPTS} -u "$MYSQL_USER" -p"$MYSQL_PASS" ${MYSQL_SSL_OPTS:-} -e "SHOW DATABASES;" | tr -d "| " | grep -v Database)}}
 for db in ${DATABASES}
 do
   if  [[ "$db" != "information_schema" ]] \
@@ -51,7 +66,7 @@ do
       && [[ "$db" != _* ]]
   then
     echo "==> Dumping database: $db"
-    
+
     # Determine filename based on mode
     if [ "${DATABASE_SPLIT_TO_FILE:-false}" = "true" ]; then
         FILENAME="${BACKUP_DIR}/${db}.sql"
@@ -60,14 +75,14 @@ do
         FILENAME="${BACKUP_DIR}/${DATE}.${db}.sql"
         LATEST="${BACKUP_DIR}/latest.${db}.sql"
     fi
-    
+
     BASIC_OPTS=(--single-transaction --skip-lock-tables --quick)
     if [ -n "${REMOVE_DUPLICATES:-}" ]; then
       BASIC_OPTS+=(--skip-dump-date)
     fi
-    
+
     # shellcheck disable=SC2086
-    if mysqldump "${BASIC_OPTS[@]}" ${MYSQLDUMP_OPTS:-} -h "$MYSQL_HOST" -P "$MYSQL_PORT" -u "$MYSQL_USER" -p"$MYSQL_PASS" ${MYSQL_SSL_OPTS:-} "$db" > "$FILENAME"; then
+    if mysqldump "${BASIC_OPTS[@]}" ${MYSQLDUMP_OPTS:-} ${MYSQL_CONN_OPTS} -u "$MYSQL_USER" -p"$MYSQL_PASS" ${MYSQL_SSL_OPTS:-} "$db" > "$FILENAME"; then
       EXT=""
       
       # Compression

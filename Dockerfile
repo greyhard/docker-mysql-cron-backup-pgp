@@ -1,4 +1,4 @@
-FROM alpine:3.20.3
+FROM alpine:3.14
 LABEL maintainer="Ilynikh Denis <greyhard@gmail.com>"
 
 RUN apk add --update \
@@ -6,7 +6,7 @@ RUN apk add --update \
     bash \
     gzip \
     openssl \
-    mysql-client=~10.11 \
+    mysql-client \
     mariadb-connector-c \
     netcat-openbsd \
     gnupg \
@@ -16,6 +16,7 @@ RUN apk add --update \
 ENV CRON_TIME="0 3 * * sun" \
     MYSQL_HOST="mysql" \
     MYSQL_PORT="3306" \
+    MYSQL_SOCKET="" \
     TIMEOUT="10" \
     MYSQLDUMP_OPTS="--quick"
 

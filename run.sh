@@ -20,8 +20,12 @@ wait_for_db() {
     return 0
 }
 
-# Wait for database before starting
-wait_for_db || echo "=> Warning: Database not ready, continuing anyway..."
+# Wait for database before starting (skip if using socket)
+if [ -z "${MYSQL_SOCKET:-}" ]; then
+    wait_for_db || echo "=> Warning: Database not ready, continuing anyway..."
+else
+    echo "=> Using socket connection, skipping TCP readiness check"
+fi
 
 tail -F /mysql_backup.log &
 

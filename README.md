@@ -12,7 +12,7 @@ docker container run -d \
        --env MYSQL_PASS=my_password \
        --link mysql
        --volume /path/to/my/backup/folder:/backup
-       fradelg/mysql-cron-backup
+       greyhard/docker-mysql-cron-backup-pgp
 ```
 
 ### Healthcheck
@@ -27,6 +27,8 @@ Container is **Healthy** after the database init phase, that is after `INIT_BACK
 - `MYSQL_HOST`: The host/ip of your mysql database.
 - `MYSQL_HOST_FILE`: The file in container where to find the host of your mysql database (cf. docker secrets). You should use either MYSQL_HOST_FILE or MYSQL_HOST (see examples below).
 - `MYSQL_PORT`: The port number of your mysql database.
+- `MYSQL_SOCKET`: Path to MySQL socket file for local connections. When set, `MYSQL_HOST` and `MYSQL_PORT` are ignored.
+- `MYSQL_SOCKET_FILE`: The file in container where to find the socket path (cf. docker secrets). You should use either MYSQL_SOCKET_FILE or MYSQL_SOCKET.
 - `MYSQL_USER`: The username of your mysql database.
 - `MYSQL_USER_FILE`: The file in container where to find the user of your mysql database (cf. docker secrets). You should use either MYSQL_USER_FILE or MYSQL_USER (see examples below).
 - `MYSQL_PASS`: The password of your mysql database.
@@ -102,7 +104,7 @@ services:
     restart: unless-stopped
 
   mysql-cron-backup:
-    image: fradelg/mysql-cron-backup
+    image: greyhard/docker-mysql-cron-backup-pgp
     depends_on:
       - mariadb
     volumes:
@@ -170,7 +172,7 @@ services:
 
   backup:
     build: .
-    image: fradelg/mysql-cron-backup
+    image: greyhard/docker-mysql-cron-backup-pgp
     depends_on:
       - mariadb
     volumes:
@@ -195,6 +197,32 @@ volumes:
   data:
 
 ```
+
+### Docker-compose with local MySQL using socket:
+
+```yaml
+version: "3.7"
+
+services:
+  backup:
+    image: greyhard/docker-mysql-cron-backup-pgp
+    volumes:
+      - ./backup:/backup
+      # Mount MySQL socket from host
+      - /var/run/mysqld/mysqld.sock:/var/run/mysqld/mysqld.sock
+    environment:
+      # Use socket instead of TCP connection
+      - MYSQL_SOCKET=/var/run/mysqld/mysqld.sock
+      - MYSQL_USER=root
+      - MYSQL_PASS=my_password
+      - MAX_BACKUPS=7
+      - INIT_BACKUP=1
+      - CRON_TIME=0 3 * * *
+      - GZIP_LEVEL=9
+    restart: unless-stopped
+```
+
+**Note**: Make sure the socket file has appropriate permissions and the MySQL user has access from the Docker container's network namespace.
 
 ### Docker-compose with PGP encryption and split mode:
 
@@ -225,7 +253,7 @@ services:
     restart: unless-stopped
 
   backup:
-    image: greyhard/mysql-cron-backup-pgp
+    image: greyhard/docker-mysql-cron-backup-pgp
     depends_on:
       - mariadb
     volumes:
