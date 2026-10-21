@@ -1,22 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-# Get socket path: try read from file, else get from env
-[ -z "${MYSQL_SOCKET_FILE:-}" ] || MYSQL_SOCKET=$(head -1 "${MYSQL_SOCKET_FILE}")
-MYSQL_SOCKET="${MYSQL_SOCKET:-}"
+# shellcheck source=env.sh
+. /env.sh
 
-# Get hostname: try read from file, else get from env (only if socket not set)
-if [ -z "${MYSQL_SOCKET}" ]; then
-  [ -z "${MYSQL_HOST_FILE:-}" ] || MYSQL_HOST=$(head -1 "${MYSQL_HOST_FILE}")
-  [ -z "${MYSQL_HOST:-}" ] && { echo "=> MYSQL_HOST or MYSQL_SOCKET must be set"; exit 1; }
-fi
-# Get username: try read from file, else get from env
-[ -z "${MYSQL_USER_FILE:-}" ] || MYSQL_USER=$(head -1 "${MYSQL_USER_FILE}")
-[ -z "${MYSQL_USER:-}" ] && { echo "=> MYSQL_USER cannot be empty"; exit 1; }
-# Get password: try read from file, else get from env, else get from MYSQL_PASSWORD env
-[ -z "${MYSQL_PASS_FILE:-}" ] || MYSQL_PASS=$(head -1 "${MYSQL_PASS_FILE}")
-MYSQL_PASS="${MYSQL_PASS:-${MYSQL_PASSWORD:-}}"
-[ -z "${MYSQL_PASS}" ] && { echo "=> MYSQL_PASS cannot be empty"; exit 1; }
 # Get database name(s): try read from file, else get from env
 # Note: when from file, there can be one database name per line in that file
 [ -z "${MYSQL_DATABASE_FILE:-}" ] || MYSQL_DATABASE=$(cat "${MYSQL_DATABASE_FILE}")
@@ -46,14 +33,17 @@ else
     echo "=> Using flat mode: ${BACKUP_DIR}"
 fi
 
-# Build connection options
 if [ -n "${MYSQL_SOCKET}" ]; then
-  MYSQL_CONN_OPTS="--protocol=SOCKET --socket=${MYSQL_SOCKET} -h localhost"
   echo "=> Using socket connection: ${MYSQL_SOCKET}"
 else
-  MYSQL_CONN_OPTS="-h ${MYSQL_HOST} -P ${MYSQL_PORT}"
   echo "=> Using TCP connection: ${MYSQL_HOST}:${MYSQL_PORT}"
 fi
+
+# Anything short of dumping every database is a failed run for the healthcheck
+DUMPED=0
+FAILED=0
+# Any non-zero exit (explicit or via set -e) is recorded as a failed run
+trap '[ $? -eq 0 ] || date +%s > "${LAST_FAILURE_FILE}"' EXIT
 
 # shellcheck disable=SC2086
 DATABASES=${MYSQL_DATABASE:-${MYSQL_DB:-$(mysql ${MYSQL_CONN_OPTS} -u "$MYSQL_USER" -p"$MYSQL_PASS" ${MYSQL_SSL_OPTS:-} -e "SHOW DATABASES;" | tr -d "| " | grep -v Database)}}
@@ -131,14 +121,17 @@ do
               EXT="${EXT}.gpg"
               echo "==> Encrypted successfully: ${FILENAME}"
             else
+              FAILED=$((FAILED + 1))
               echo "!! PGP encryption failed: .gpg file not created (exit code: $GPG_EXIT_CODE)"
               echo "!! GPG output: ${GPG_ENCRYPT_OUTPUT}"
             fi
           else
+            FAILED=$((FAILED + 1))
             echo "!! PGP encryption command failed for $db (exit code: $GPG_EXIT_CODE)"
             echo "!! GPG output: ${GPG_ENCRYPT_OUTPUT}"
           fi
         else
+          FAILED=$((FAILED + 1))
           echo "!! Could not extract key ID from PGP key"
           echo "!! Debug: trying to list all keys in keyring..."
           gpg --list-keys 2>&1 || true
@@ -164,7 +157,9 @@ do
         # Execute the delete script, delete older backup or other custom delete script
         /delete.sh "$db" "$EXT"
       fi
+      DUMPED=$((DUMPED + 1))
     else
+      FAILED=$((FAILED + 1))
       echo "!! Failed to dump $db"
       rm -f "$FILENAME"
     fi
@@ -187,3 +182,9 @@ if [ "${DATABASE_SPLIT_TO_FILE:-false}" = "true" ] && [ -n "${MAX_BACKUPS:-}" ];
 fi
 
 echo "=> Backup process finished at $(date "+%Y-%m-%d %H:%M:%S")"
+
+if [ "$FAILED" -gt 0 ] || [ "$DUMPED" -eq 0 ]; then
+  echo "!! Backup run failed: ${DUMPED} database(s) dumped, ${FAILED} error(s)"
+  exit 1
+fi
+date +%s > "${LAST_SUCCESS_FILE}"

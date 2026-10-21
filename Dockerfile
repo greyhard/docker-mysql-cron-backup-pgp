@@ -18,18 +18,20 @@ ENV CRON_TIME="0 3 * * sun" \
     MYSQL_PORT="3306" \
     MYSQL_SOCKET="" \
     TIMEOUT="10" \
-    MYSQLDUMP_OPTS="--quick"
+    MYSQLDUMP_OPTS="--quick" \
+    HEALTHCHECK_MAX_AGE_HOURS="48"
 
-COPY ["run.sh", "backup.sh", "/delete.sh", "/"]
+COPY ["run.sh", "backup.sh", "delete.sh", "env.sh", "healthcheck.sh", "/"]
 RUN mkdir /backup && \
     chmod 777 /backup && \ 
-    chmod 755 /run.sh /backup.sh /delete.sh && \
+    chmod 755 /run.sh /backup.sh /delete.sh /env.sh /healthcheck.sh && \
     touch /mysql_backup.log && \
     chmod 666 /mysql_backup.log
 
 VOLUME ["/backup"]
 
-HEALTHCHECK --interval=2s --retries=1800 \
-    CMD stat /HEALTHY.status || exit 1
+# start-period covers INIT_BACKUP of a large database; start-interval reports healthy soon after it
+HEALTHCHECK --interval=60s --timeout=10s --start-period=30m --start-interval=5s --retries=3 \
+    CMD ["/healthcheck.sh"]
 
 CMD ["/run.sh"]

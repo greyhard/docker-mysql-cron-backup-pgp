@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# The container layer survives `docker restart`: drop the old init marker so the
+# healthcheck waits for this start, and remember when it began (see healthcheck.sh)
+rm -f /HEALTHY.status
+date +%s > /started_at
+
 # Wait for database to be ready
 wait_for_db() {
     echo "=> Waiting for database $MYSQL_HOST:$MYSQL_PORT to be ready..."

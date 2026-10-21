@@ -28,9 +28,16 @@ docker container run -d \
 
 ### Healthcheck
 
+`/healthcheck.sh` runs every minute. The container is **healthy** only when all of these hold:
 
-Healthcheck is provided as a basic init control.
-Container is **Healthy** after the database init phase, that is after `INIT_BACKUP` or `INIT_RESTORE_LATEST` happends without check if there is an error, **Starting** otherwise. Not other checks are actually provided.
+1. the init phase is finished (after `INIT_BACKUP`, if set); after `docker restart` the container is **starting** again until it finishes;
+2. the database accepts the backup credentials: `SELECT 1` with the same host/socket, user, password and `MYSQL_SSL_OPTS` that `backup.sh` uses;
+3. the last backup run did not fail — a run fails when any database could not be dumped or encrypted, or when no database was dumped at all;
+4. the last successful backup is not older than `HEALTHCHECK_MAX_AGE_HOURS` (48 by default). Until the first backup the window counts from the container start.
+
+The result of each run is kept in the `/backup` volume (`.last_success`, `.last_failure` — epoch seconds), so it survives container re-creation. The reason of the last check is shown by `docker inspect --format '{{json .State.Health}}' <container>`.
+
+**Note**: the default `CRON_TIME` (`0 3 * * sun`, weekly) does not fit the default 48 hours: with weekly backups set `HEALTHCHECK_MAX_AGE_HOURS` above a week (e.g. `192`) or back up daily.
 
 ## Variables
 
@@ -54,6 +61,7 @@ Container is **Healthy** after the database init phase, that is after `INIT_BACK
 - `EXIT_BACKUP`: If set, create a backup when the container stops.
 - `TIMEOUT`: Wait a given number of seconds for the database to be ready and make the first backup, `10s` by default. After that time, the initial attempt for backup gives up and only the Cron job will try to make a backup.
 - `GZIP_LEVEL`: Specify the level of gzip compression from 1 (quickest, least compressed) to 9 (slowest, most compressed), default is 6.
+- `HEALTHCHECK_MAX_AGE_HOURS`: Max age in hours of the last successful backup before the container turns **unhealthy**, default is 48 (see [Healthcheck](#healthcheck)).
 - `TZ`: Specify TIMEZONE in Container. E.g. "Europe/Berlin". Default is UTC.
 - `REMOVE_DUPLICATES`: Use [fdupes](https://github.com/adrianlopezroche/fdupes) to remove duplicate database dumps
 - `DATABASE_SPLIT_TO_FILE`: If set to `true`, creates a separate directory for each backup session with individual files per database. Default is `false` (flat structure).
