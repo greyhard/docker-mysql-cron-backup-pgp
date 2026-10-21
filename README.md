@@ -28,16 +28,61 @@ docker container run -d \
 
 ### Healthcheck
 
-`/healthcheck.sh` runs every minute. The container is **healthy** only when all of these hold:
+The image has a built-in Docker `HEALTHCHECK` (`/healthcheck.sh`). It answers one question: *are backups actually being made?* — not just "is the container running".
 
-1. the init phase is finished (after `INIT_BACKUP`, if set); after `docker restart` the container is **starting** again until it finishes;
-2. the database accepts the backup credentials: `SELECT 1` with the same host/socket, user, password and `MYSQL_SSL_OPTS` that `backup.sh` uses;
-3. the last backup run did not fail — a run fails when any database could not be dumped or encrypted, or when no database was dumped at all;
-4. the last successful backup is not older than `HEALTHCHECK_MAX_AGE_HOURS` (48 by default). Until the first backup the window counts from the container start.
+#### What is checked
 
-The result of each run is kept in the `/backup` volume (`.last_success`, `.last_failure` — epoch seconds), so it survives container re-creation. The reason of the last check is shown by `docker inspect --format '{{json .State.Health}}' <container>`.
+Checks run in this order; the first one that fails makes the container **unhealthy** and its message becomes the check output:
+
+| # | Check | Fails when | Output on failure |
+|---|-------|------------|-------------------|
+| 1 | Init phase finished | `run.sh` is still waiting for the database or running `INIT_BACKUP` | `init phase not finished` |
+| 2 | Database connection | `SELECT 1` fails with the **same** host/socket, user, password and `MYSQL_SSL_OPTS` that `backup.sh` uses (`*_FILE` variables included). `mysqladmin ping` is deliberately not used: it succeeds even on `Access denied` | `database connection failed: ERROR 1045 (28000): Access denied ...` |
+| 3 | Last backup run | the most recent run of `backup.sh` failed: a database could not be dumped or PGP-encrypted, no database was dumped at all, or the script aborted | `last backup run failed at 2026-10-21 03:00:01` |
+| 4 | Backup age | the last successful backup is older than `HEALTHCHECK_MAX_AGE_HOURS` (default `48`). Before the first backup the age counts from the container start, so a fresh container gets the same window | `last successful backup at ..., older than 48h` |
+
+When everything passes the output is `ok: last successful backup at ...` (or `ok: no backup yet, started at ...`).
+
+A failed run keeps the container unhealthy until the next **successful** run (cron or a manual `docker exec <container> /backup.sh`). A dead `crond` is caught by check 4: no new backups — the age grows past the limit.
+
+#### Timing
+
+```
+HEALTHCHECK --interval=60s --timeout=10s --start-period=30m --start-interval=5s --retries=3
+```
+
+- every minute in normal operation; **unhealthy** after 3 failed checks in a row (about 3 minutes);
+- during the first 30 minutes failures are not counted, so a long `INIT_BACKUP` of a large database does not flip the container to unhealthy; checks run every 5 seconds there, so it turns **healthy** right after the init;
+- after `docker restart` the status is **starting** again until the init phase of the new start is finished.
+
+#### Where the state lives
+
+`backup.sh` writes epoch seconds to `/backup/.last_success` or `/backup/.last_failure` at the end of every run. Both files live in the `/backup` volume, so the backup history survives `docker compose down/up` and image upgrades. They are not touched by `MAX_BACKUPS` rotation. Deleting them resets the history (the age counts from the container start again).
+
+#### Reading the status
+
+```bash
+docker ps --filter name=backup                      # STATUS column: (healthy) / (unhealthy) / (health: starting)
+docker inspect --format '{{json .State.Health}}' <container> | jq   # last 5 checks with their output
+docker exec <container> /healthcheck.sh             # run the check by hand
+```
+
+#### Tuning
+
+```yaml
+  backup:
+    image: greyhard/docker-mysql-cron-backup-pgp
+    environment:
+      - CRON_TIME=0 3 * * *
+      - HEALTHCHECK_MAX_AGE_HOURS=48     # allowed age of the last successful backup
+    healthcheck:                         # optional: override the timing
+      interval: 5m
+      start_period: 2h                   # e.g. for a very large INIT_BACKUP
+```
 
 **Note**: the default `CRON_TIME` (`0 3 * * sun`, weekly) does not fit the default 48 hours: with weekly backups set `HEALTHCHECK_MAX_AGE_HOURS` above a week (e.g. `192`) or back up daily.
+
+Images before `1.0` only checked that the init phase was over (`/HEALTHY.status`); failed backups did not affect the status.
 
 ## Variables
 

@@ -1,0 +1,27 @@
+name: docker hub description
+
+# Docker Hub shows README.md as the repository overview; keep it in sync
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - README.md
+      - .github/workflows/dockerhub-description.yml
+  workflow_dispatch:
+
+jobs:
+  description:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout the code
+        uses: actions/checkout@v5
+      # The token needs Read, Write, Delete scope to update the description
+      - name: Update Docker Hub description
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: greyhard
+          password: ${{ secrets.DOCKER_PASSWORD }}
+          repository: greyhard/docker-mysql-cron-backup-pgp
+          short-description: MySQL/MariaDB cron backups with PGP encryption and a healthcheck of real backups
+          readme-filepath: ./README.md
