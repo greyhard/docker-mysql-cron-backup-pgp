@@ -39,11 +39,42 @@ else
   echo "=> Using TCP connection: ${MYSQL_HOST}:${MYSQL_PORT}"
 fi
 
+# Any non-zero exit (explicit or via set -e) is recorded as a failed run
+trap '[ $? -eq 0 ] || date +%s > "${LAST_FAILURE_FILE}"' EXIT
+
+# PGP: import the key and resolve its ID once, before the loop over databases.
+# Without a usable key the run is aborted: writing unencrypted dumps when encryption
+# was requested is worse than writing nothing (the healthcheck reports the failure)
+KEY_ID=""
+if [ -n "${PGP_KEY}" ]; then
+  echo "=> Importing PGP key"
+  GPG_IMPORT_OUTPUT=$(echo "${PGP_KEY}" | gpg --batch --yes --import 2>&1) || true
+  echo "${GPG_IMPORT_OUTPUT}" | grep -E "(imported|processed|secret key)" || echo "Key import status: ${GPG_IMPORT_OUTPUT}"
+
+  # Key ID from the pub (public) or sec (secret) line, else the fingerprint
+  KEY_ID=$(echo "${PGP_KEY}" | gpg --batch --with-colons --import-options show-only --import 2>/dev/null | grep -E '^(pub|sec)' | head -1 | cut -d: -f5 || true)
+  if [ -z "${KEY_ID}" ]; then
+    KEY_ID=$(echo "${PGP_KEY}" | gpg --batch --with-colons --import-options show-only --import 2>/dev/null | grep '^fpr' | head -1 | cut -d: -f10 || true)
+  fi
+  if [ -z "${KEY_ID}" ]; then
+    echo "!! Could not extract key ID from PGP key"
+    echo "!! Debug: trying to list all keys in keyring..."
+    gpg --list-keys 2>&1 || true
+    exit 1
+  fi
+  echo "=> Using key ID: ${KEY_ID}"
+  # Set trust level to ultimate for this key
+  echo "${KEY_ID}:6:" | gpg --batch --import-ownertrust 2>/dev/null || true
+fi
+
+# Suffix added to <name>.sql by the pipeline stages below; delete.sh matches files by it
+EXT=""
+[ -n "${USE_PLAIN_SQL:-}" ] || EXT=".gz"
+[ -z "${KEY_ID}" ] || EXT="${EXT}.gpg"
+
 # Anything short of dumping every database is a failed run for the healthcheck
 DUMPED=0
 FAILED=0
-# Any non-zero exit (explicit or via set -e) is recorded as a failed run
-trap '[ $? -eq 0 ] || date +%s > "${LAST_FAILURE_FILE}"' EXIT
 
 # shellcheck disable=SC2086
 DATABASES=${MYSQL_DATABASE:-${MYSQL_DB:-$(mysql ${MYSQL_CONN_OPTS} -u "$MYSQL_USER" -p"$MYSQL_PASS" ${MYSQL_SSL_OPTS:-} -e "SHOW DATABASES;" | tr -d "| " | grep -v Database)}}
@@ -59,108 +90,81 @@ do
 
     # Determine filename based on mode
     if [ "${DATABASE_SPLIT_TO_FILE:-false}" = "true" ]; then
-        FILENAME="${BACKUP_DIR}/${db}.sql"
-        LATEST="/backup/latest/${db}.sql"
+        FILENAME="${BACKUP_DIR}/${db}.sql${EXT}"
+        LATEST="/backup/latest/${db}.sql${EXT}"
     else
-        FILENAME="${BACKUP_DIR}/${DATE}.${db}.sql"
-        LATEST="${BACKUP_DIR}/latest.${db}.sql"
+        FILENAME="${BACKUP_DIR}/${DATE}.${db}.sql${EXT}"
+        LATEST="${BACKUP_DIR}/latest.${db}.sql${EXT}"
     fi
 
     BASIC_OPTS=(--single-transaction --skip-lock-tables --quick)
     if [ -n "${REMOVE_DUPLICATES:-}" ]; then
       BASIC_OPTS+=(--skip-dump-date)
     fi
+    # shellcheck disable=SC2206  # MYSQLDUMP_OPTS, MYSQL_CONN_OPTS and MYSQL_SSL_OPTS are word lists
+    DUMP=(mysqldump "${BASIC_OPTS[@]}" ${MYSQLDUMP_OPTS:-} ${MYSQL_CONN_OPTS} -u "$MYSQL_USER" -p"$MYSQL_PASS" ${MYSQL_SSL_OPTS:-} "$db")
 
-    # shellcheck disable=SC2086
-    if mysqldump "${BASIC_OPTS[@]}" ${MYSQLDUMP_OPTS:-} ${MYSQL_CONN_OPTS} -u "$MYSQL_USER" -p"$MYSQL_PASS" ${MYSQL_SSL_OPTS:-} "$db" > "$FILENAME"; then
-      EXT=""
-      
-      # Compression
-      if [ -z "${USE_PLAIN_SQL:-}" ]; then
-        echo "==> Compressing $db with LEVEL $GZIP_LEVEL"
-        gzip "-$GZIP_LEVEL" -n -f "$FILENAME"
-        EXT=".gz"
-        FILENAME="${FILENAME}${EXT}"
-        LATEST="${LATEST}${EXT}"
+    # The dump is streamed through gzip and gpg straight into the final file, so the raw
+    # SQL never touches the disk: the peak disk usage of a run is the size of the
+    # compressed (and encrypted) file. STAGES names the pipeline stages, STATUS holds
+    # their exit codes in the same order (PIPESTATUS, so a failed mysqldump is not masked
+    # by a successful gzip/gpg)
+    set +e
+    if [ -z "${USE_PLAIN_SQL:-}" ] && [ -n "${KEY_ID}" ]; then
+      echo "==> Compressing with LEVEL $GZIP_LEVEL and encrypting with PGP key ${KEY_ID}"
+      STAGES=(mysqldump gzip gpg)
+      "${DUMP[@]}" | gzip "-$GZIP_LEVEL" -n | gpg --batch --yes --trust-model always --encrypt --recipient "${KEY_ID}" --output "$FILENAME"
+      STATUS=("${PIPESTATUS[@]}")
+    elif [ -z "${USE_PLAIN_SQL:-}" ]; then
+      echo "==> Compressing with LEVEL $GZIP_LEVEL"
+      STAGES=(mysqldump gzip)
+      "${DUMP[@]}" | gzip "-$GZIP_LEVEL" -n > "$FILENAME"
+      STATUS=("${PIPESTATUS[@]}")
+    elif [ -n "${KEY_ID}" ]; then
+      echo "==> Encrypting with PGP key ${KEY_ID}"
+      STAGES=(mysqldump gpg)
+      "${DUMP[@]}" | gpg --batch --yes --trust-model always --encrypt --recipient "${KEY_ID}" --output "$FILENAME"
+      STATUS=("${PIPESTATUS[@]}")
+    else
+      STAGES=(mysqldump)
+      "${DUMP[@]}" > "$FILENAME"
+      STATUS=("${PIPESTATUS[@]}")
+    fi
+    set -e
+
+    DUMP_OK=1
+    for i in "${!STATUS[@]}"; do
+      if [ "${STATUS[$i]}" -ne 0 ]; then
+        echo "!! ${STAGES[$i]} failed for $db (exit code: ${STATUS[$i]})"
+        DUMP_OK=0
       fi
-      
-      # PGP Encryption
-      if [ -n "${PGP_KEY:-}" ]; then
-        set +e  # Temporarily disable exit on error for PGP block
-        echo "==> Encrypting $db with PGP"
-        
-        # Import key to GPG keyring
-        GPG_IMPORT_OUTPUT=$(echo "${PGP_KEY}" | gpg --batch --yes --import 2>&1)
-        echo "${GPG_IMPORT_OUTPUT}" | grep -E "(imported|processed|secret key)" || echo "Key import status: ${GPG_IMPORT_OUTPUT}"
-        
-        # Get the key fingerprint/ID from imported keys
-        # Try pub first (public key), then sec (secret/private key)
-        KEY_ID=$(echo "${PGP_KEY}" | gpg --batch --with-colons --import-options show-only --import 2>/dev/null | grep -E '^(pub|sec)' | head -1 | cut -d: -f5)
-        
-        if [ -z "${KEY_ID}" ]; then
-          # Fallback: try to get from fpr (fingerprint) line
-          KEY_ID=$(echo "${PGP_KEY}" | gpg --batch --with-colons --import-options show-only --import 2>/dev/null | grep '^fpr' | head -1 | cut -d: -f10)
-        fi
-        
-        if [ -n "${KEY_ID}" ]; then
-          echo "==> Using key ID: ${KEY_ID}"
-          
-          # Set trust level to ultimate for this key
-          echo "${KEY_ID}:6:" | gpg --batch --import-ownertrust 2>/dev/null || true
-          
-          # Encrypt the file
-          echo "==> Running: gpg --encrypt --recipient ${KEY_ID} --output ${FILENAME}.gpg ${FILENAME}"
-          GPG_ENCRYPT_OUTPUT=$(gpg --batch --yes --trust-model always --encrypt --recipient "${KEY_ID}" --output "${FILENAME}.gpg" "${FILENAME}" 2>&1)
-          GPG_EXIT_CODE=$?
-          
-          if [ $GPG_EXIT_CODE -eq 0 ]; then
-            if [ -f "${FILENAME}.gpg" ]; then
-              rm -f "${FILENAME}"
-              FILENAME="${FILENAME}.gpg"
-              LATEST="${LATEST}.gpg"
-              EXT="${EXT}.gpg"
-              echo "==> Encrypted successfully: ${FILENAME}"
-            else
-              FAILED=$((FAILED + 1))
-              echo "!! PGP encryption failed: .gpg file not created (exit code: $GPG_EXIT_CODE)"
-              echo "!! GPG output: ${GPG_ENCRYPT_OUTPUT}"
-            fi
-          else
-            FAILED=$((FAILED + 1))
-            echo "!! PGP encryption command failed for $db (exit code: $GPG_EXIT_CODE)"
-            echo "!! GPG output: ${GPG_ENCRYPT_OUTPUT}"
-          fi
-        else
-          FAILED=$((FAILED + 1))
-          echo "!! Could not extract key ID from PGP key"
-          echo "!! Debug: trying to list all keys in keyring..."
-          gpg --list-keys 2>&1 || true
-        fi
-        set -e  # Re-enable exit on error
-      fi
-      
+    done
+
+    if [ "$DUMP_OK" -eq 1 ] && [ -s "$FILENAME" ]; then
+      echo "==> Written: ${FILENAME}"
       BASENAME=$(basename "$FILENAME")
-      
+
       # Create symlink for latest (only in flat mode)
       if [ "${DATABASE_SPLIT_TO_FILE:-false}" != "true" ]; then
         echo "==> Creating symlink to latest backup: $BASENAME"
         rm -f "$LATEST" 2>/dev/null
         (cd /backup && ln -sf "$BASENAME" "$(basename "$LATEST")")
       fi
-      
+
       if [ -n "${REMOVE_DUPLICATES:-}" ]; then
         echo "==> Removing duplicate database dumps"
         fdupes -idN /backup/
       fi
-      
+
       if [ -n "${MAX_BACKUPS:-}" ]; then
         # Execute the delete script, delete older backup or other custom delete script
         /delete.sh "$db" "$EXT"
       fi
       DUMPED=$((DUMPED + 1))
     else
+      [ "$DUMP_OK" -eq 0 ] || echo "!! Dump of $db is empty"
       FAILED=$((FAILED + 1))
-      echo "!! Failed to dump $db"
+      echo "!! Failed to dump $db, removing incomplete file"
       rm -f "$FILENAME"
     fi
   fi

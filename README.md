@@ -13,7 +13,8 @@ Differences from the original:
 - PGP encryption of dumps (`PGP_KEY`, `PGP_KEY_FILE`);
 - split mode: a directory per backup run (`DATABASE_SPLIT_TO_FILE`);
 - connection through a MySQL socket (`MYSQL_SOCKET`, `MYSQL_SOCKET_FILE`);
-- a healthcheck that verifies the database connection and the age of the last successful backup.
+- a healthcheck that verifies the database connection and the age of the last successful backup;
+- the dump is streamed through gzip and gpg: the raw SQL never touches the disk.
 
 ## Usage:
 
@@ -25,6 +26,24 @@ docker container run -d \
        --volume /path/to/my/backup/folder:/backup
        greyhard/docker-mysql-cron-backup-pgp
 ```
+
+### Disk usage
+
+`backup.sh` pipes `mysqldump` straight into `gzip` and (when a PGP key is set) into `gpg`:
+
+```
+mysqldump ... | gzip -$GZIP_LEVEL -n | gpg --encrypt --recipient <key> --output <db>.sql.gz.gpg
+```
+
+The raw `.sql` is never written, so the extra space a run needs is the size of the compressed
+(and encrypted) file being written — not the size of the uncompressed dump. A database that packs
+into 1.5 GB of gzip needs 1.5 GB of free space in `/backup`, not the 13 GB of its plain SQL plus
+the archive. Images up to `1.0` wrote the plain dump first and compressed it afterwards; the disk had
+to hold the plain dump and the archive at the same time.
+
+If `mysqldump`, `gzip` or `gpg` fails, the incomplete file is removed and the run is reported as
+failed (see [Healthcheck](#healthcheck)). With `USE_PLAIN_SQL` set the dump is written as `.sql`
+(or piped into `gpg` as `.sql.gpg`) without compression.
 
 ### Healthcheck
 
@@ -106,6 +125,7 @@ Images before `1.0` only checked that the init phase was over (`/HEALTHY.status`
 - `EXIT_BACKUP`: If set, create a backup when the container stops.
 - `TIMEOUT`: Wait a given number of seconds for the database to be ready and make the first backup, `10s` by default. After that time, the initial attempt for backup gives up and only the Cron job will try to make a backup.
 - `GZIP_LEVEL`: Specify the level of gzip compression from 1 (quickest, least compressed) to 9 (slowest, most compressed), default is 6.
+- `USE_PLAIN_SQL`: If set, skip gzip and keep the dumps as plain `.sql` (or `.sql.gpg` with a PGP key).
 - `HEALTHCHECK_MAX_AGE_HOURS`: Max age in hours of the last successful backup before the container turns **unhealthy**, default is 48 (see [Healthcheck](#healthcheck)).
 - `TZ`: Specify TIMEZONE in Container. E.g. "Europe/Berlin". Default is UTC.
 - `REMOVE_DUPLICATES`: Use [fdupes](https://github.com/adrianlopezroche/fdupes) to remove duplicate database dumps
@@ -133,7 +153,9 @@ When `DATABASE_SPLIT_TO_FILE=true`, backups are organized in timestamped directo
 
 ### PGP Encryption
 
-Backups can be encrypted using PGP. Encrypted files have `.gpg` extension:
+Backups can be encrypted using PGP. Encrypted files have `.gpg` extension. The key is imported once
+per run and the dump is encrypted on the fly (see [Disk usage](#disk-usage)); if the key cannot be
+used, the run is aborted before any dump is written, so no unencrypted file is left behind.
 
 ```bash
 # Using PGP key from environment variable
