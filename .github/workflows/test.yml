@@ -15,12 +15,6 @@ jobs:
       - name: Test Bash scripts
         run: sudo apt-get -qq update && sudo apt-get install -y devscripts shellcheck && make test
       - name: Test image
-        env:
-          VOLUME_PATH: /tmp/mariadb 
-          DATABASE_NAME: foo
-          MARIADB_ROOT_PASSWORD: abcd 
-        run: |
-          docker compose up -d mariadb
-          docker compose run backup /backup.sh
-          docker compose run backup /restore.sh /backup/latest.foo.sql.gz
-          docker compose stop
+        # Builds the image, makes a PGP-encrypted backup against MariaDB from docker-compose.yaml,
+        # decrypts and restores it, and waits for the container to report healthy
+        run: ./test-image.sh
