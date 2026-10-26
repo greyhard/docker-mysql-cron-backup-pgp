@@ -1,0 +1,10 @@
+# Override for test-image.sh: keeps the backups and the throwaway PGP key in TEST_DIR
+# instead of the repository's backup/ and secrets/
+services:
+  mariadb:
+    volumes:
+      - ${TEST_DIR}/backup:/backup
+  backup:
+    volumes:
+      - ${TEST_DIR}/backup:/backup
+      - ${TEST_DIR}/secrets:/secrets:ro

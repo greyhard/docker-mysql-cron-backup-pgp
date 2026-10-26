@@ -105,8 +105,9 @@ docker-compose exec backup /backup.sh
 # Check that .gpg files were created
 docker-compose exec backup ls -lh /backup/
 
-# Test restore
-docker-compose exec backup /restore.sh /backup/latest/mydb.sql.gz.gpg
+# Decrypt and decompress a backup (the private key must be in your local keyring)
+gpg --import ./secrets/pgp_private_key
+gpg --batch --decrypt ./backup/latest/mydb.sql.gz.gpg | gunzip > mydb.sql
 ```
 
 ## Troubleshooting
